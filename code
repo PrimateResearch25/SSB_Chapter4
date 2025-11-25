@@ -212,6 +212,14 @@ make_ssb_plot <- function(trait_name, df_model = df_trials, m = m_ssb_bb_full,
                           show_count = FALSE) {
   stopifnot(trait_name %in% c("introversion","openness","boldness","calmness"))
   
+  trait_cols <- c(
+    boldness     = "#C6DDDD",  
+    calmness     = "#8DD3EF",  
+    introversion = "#B2B3F0",  
+    openness     = "#D1BCDF"   
+  )
+  this_fill <- trait_cols[[trait_name]]
+
   rng <- range(df_model[[trait_name]], na.rm = TRUE)
   newdat <- data.frame(
     introversion = mean(df_model$introversion, na.rm = TRUE),
@@ -253,26 +261,44 @@ make_ssb_plot <- function(trait_name, df_model = df_trials, m = m_ssb_bb_full,
   plot_df <- plot_df[ok, , drop = FALSE]
   
   ggplot() +
-    geom_point(data = plot_df,
-               aes(x = .data[[trait_name]], y = raw_y),
-               alpha = 0.6) +
-    geom_ribbon(data = newdat,
-                aes(x = .data[[trait_name]], ymin = y_lo, ymax = y_hi),
-                alpha = 0.2) +
-    geom_line(data = newdat,
-              aes(x = .data[[trait_name]], y = y),
-              linewidth = 0.8) +
-    labs(x = trait_name, y = ylab_txt,
-         title = paste("SSB ~", trait_name, "(beta–binomial, adjusted)")) +
+    geom_ribbon(
+      data   = newdat,
+      aes(x = .data[[trait_name]], ymin = y_lo, ymax = y_hi),
+      fill   = this_fill,
+      alpha  = 0.3,
+      colour = NA
+    ) +
+    geom_line(
+      data = newdat,
+      aes(x = .data[[trait_name]], y = y),
+      linewidth = 0.8,
+      colour    = "black"
+    ) +
+    geom_point(
+      data  = plot_df,
+      aes(x = .data[[trait_name]], y = raw_y),
+      alpha = 0.5,
+      colour = "black"
+    ) +
+    labs(
+      x = trait_name,
+      y = ylab_txt,
+      title = paste("SSB ~", trait_name, "(beta–binomial, adjusted)")
+    ) +
     theme_classic()
 }
 
 p_ssb_introversion <- make_ssb_plot("introversion", show_count = FALSE)
-p_ssb_openness     <- make_ssb_plot("openness",     show_count = FALSE)
-p_ssb_boldness     <- make_ssb_plot("boldness",     show_count = FALSE)
-p_ssb_calmness     <- make_ssb_plot("calmness",     show_count = FALSE)
+p_ssb_introversion
 
-p_ssb_introversion; p_ssb_openness; p_ssb_boldness; p_ssb_calmness
+p_ssb_openness     <- make_ssb_plot("openness",     show_count = FALSE)
+p_ssb_openness
+
+p_ssb_boldness     <- make_ssb_plot("boldness",     show_count = FALSE)
+p_ssb_boldness
+
+p_ssb_calmness     <- make_ssb_plot("calmness",     show_count = FALSE)
+p_ssb_calmness
 
 
 # Heat Map - Overview 
@@ -308,7 +334,13 @@ ggplot(heat_df, aes(Predictor, Outcome, fill = rho)) +
   geom_tile(color = "white") +
   scale_fill_gradient2(limits = c(-1,1), oob = scales::squish,
                        low = "blue", mid = "white", high = "red", midpoint = 0) +
-  labs(x = NULL, y = NULL, fill = "Spearman ?",
+  labs(x = NULL, y = NULL, fill = "Spearman ρ",
        title = "Overview: correlations between personality traits and behaviours") +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+
+
+
