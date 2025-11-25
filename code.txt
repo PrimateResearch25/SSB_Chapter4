@@ -1,0 +1,314 @@
+## Analysis
+
+library(readr)
+library(MASS)
+library(broom)
+library(glmmTMB)
+
+dat <- read_csv("proportion_data.csv")
+
+
+# Standardise behavioural proportions
+Z <- as.data.frame(scale(dat[ , -1]))
+
+Z <- cbind(ID = dat$id, Z)
+
+
+# PCA
+pca <- prcomp(Z[ , -1], center = FALSE, scale. = FALSE)
+
+summary(pca)  
+
+scores <- as.data.frame(pca$x)
+scores$ID <- dat$id
+scores <- scores[ , c("ID", colnames(scores)[1:(ncol(scores)-1)])]
+
+write_csv(scores, "PCA_scores.csv")
+
+
+# Scree & cumulative variance plots 
+var_explained <- (pca$sdev ^ 2) / sum(pca$sdev ^ 2) * 100
+cum_var <- cumsum(var_explained)
+scree_df <- data.frame(
+  Component = seq_along(var_explained),
+  VariancePercent = var_explained,
+  CumulativePercent = cum_var
+)
+
+print(scree_df)
+
+plot(scree_df$Component, scree_df$VariancePercent, type = "b", pch = 19,
+     xlab = "Principal Component", ylab = "% Variance Explained",
+     main = "PCA Scree Plot")
+grid()
+
+plot(scree_df$Component, scree_df$CumulativePercent, type = "b", pch = 19,
+     xlab = "Principal Component", ylab = "Cumulative % Variance",
+     main = "Cumulative Variance Explained")
+abline(h = 70, col = "gray70", lty = 2)
+abline(h = 80, col = "gray70", lty = 2)
+grid()
+
+
+# Extract traits
+eig <- pca$sdev^2
+k_kaiser <- sum(eig > 1)                          
+k_cum70  <- which(cum_var >= 70)[1]               
+k_cum80  <- which(cum_var >= 80)[1]               
+
+K <- max(2, min(k_kaiser, ifelse(is.na(k_cum80), Inf, k_cum80)))
+
+if (!is.finite(K)) K <- max(2, k_cum70)
+
+cat("Kaiser:", k_kaiser, 
+    "| Cum>=70% at PC:", k_cum70, 
+    "| Cum>=80% at PC:", k_cum80, 
+    "| Retaining K =", K, "\n")
+
+trait_scores <- cbind(ID = dat$id, scores[ , paste0("PC", 1:K), drop = FALSE])
+print(trait_scores)
+write_csv(trait_scores, "PCA_trait_scores.csv")
+
+loadings_retained <- as.data.frame(pca$rotation[ , 1:K, drop = FALSE])
+print(loadings_retained)
+write_csv(loadings_retained, "PCA_loadings_retained.csv")
+
+
+# Full Model for SSB and Personality
+df <- read_csv("individual_data.csv")
+
+df_trials <- subset(df, total_mount_count > 0)
+
+m_ssb_bb_full <- glmmTMB(
+  cbind(ssb_count, total_mount_count - ssb_count) ~
+    introversion + openness + boldness + calmness +
+    age + davids_score + observability,
+  family = betabinomial(link = "logit"),
+  data = df_trials
+)
+summary(m_ssb_bb_full)
+
+co <- summary(m_ssb_bb_full)$coefficients$cond
+OR <- exp(co[, "Estimate"])
+LCL <- exp(co[, "Estimate"] - 1.96*co[, "Std. Error"])
+UCL <- exp(co[, "Estimate"] + 1.96*co[, "Std. Error"])
+cbind(OR, LCL, UCL)
+
+
+# Univariate Models for SSB and Personality
+m_ssb_bb_introversion <- glmmTMB(cbind(ssb_count, total_mount_count - ssb_count) ~ introversion + age + davids_score + observability, family = betabinomial(link="logit"), data = df_trials); summary(m_ssb_bb_introversion)
+
+m_ssb_bb_openness     <- glmmTMB(cbind(ssb_count, total_mount_count - ssb_count) ~ openness     + age + davids_score + observability, family = betabinomial(link="logit"), data = df_trials); summary(m_ssb_bb_openness)
+
+m_ssb_bb_boldness     <- glmmTMB(cbind(ssb_count, total_mount_count - ssb_count) ~ boldness     + age + davids_score + observability, family = betabinomial(link="logit"), data = df_trials); summary(m_ssb_bb_boldness)
+
+m_ssb_bb_calmness     <- glmmTMB(cbind(ssb_count, total_mount_count - ssb_count) ~ calmness     + age + davids_score + observability, family = betabinomial(link="logit"), data = df_trials); summary(m_ssb_bb_calmness)
+
+
+# Total Mounts and Personality (SI)
+m_mounts_gauss_full <- glmmTMB(
+  total_mount_count ~ introversion + openness + boldness + calmness + age + davids_score + observability,
+  family = gaussian(link = "identity"),
+  data = df
+)
+summary(m_mounts_gauss_full)
+
+
+#Power analysis
+co <- summary(m_ssb_bb_full)$coefficients$cond
+tab <- transform(
+  as.data.frame(co),
+  term = rownames(co),
+  OR   = exp(Estimate),
+  LCL  = exp(Estimate - 1.96*`Std. Error`),
+  UCL  = exp(Estimate + 1.96*`Std. Error`)
+)
+
+tab$n_mult_req <- (1.96 * tab$`Std. Error` / abs(tab$Estimate))^2
+
+tab$CIwidth_now <- tab$UCL - tab$LCL
+proj <- function(width, mult) width / sqrt(mult)
+
+N0 <- nrow(df_trials)
+
+out_required <- within(tab, {
+  approx_N_req = ceiling(n_mult_req * N0)
+})
+
+analytic_needed <- subset(out_required, term != "(Intercept)")[, 
+                                                               c("term","Estimate","Std. Error","OR","LCL","UCL","n_mult_req","approx_N_req","CIwidth_now")
+]
+analytic_needed <- analytic_needed[order(analytic_needed$n_mult_req), ]
+analytic_needed
+
+
+# Grooming and Personality
+m_groom_nb_full <- glmmTMB(
+  groom_count ~ introversion + openness + boldness + calmness + age + davids_score + observability,
+  family = nbinom2(link = "log"),
+  data = df
+)
+summary(m_groom_nb_full)
+
+
+# Aggression and Personality
+m_aggr_nb_full <- glmmTMB(
+  aggression_count ~ introversion + openness + boldness + calmness + age + davids_score + observability,
+  family = nbinom2(link = "log"),
+  data = df
+)
+summary(m_aggr_nb_full)
+
+
+# Coalition and Personality
+m_coal_nb_full <- glmmTMB(
+  coalition_count ~ introversion + openness + boldness + calmness + age + davids_score + observability,
+  family = nbinom2(link = "log"),
+  data = df
+)
+summary(m_coal_nb_full)
+
+
+# Self-grooming and Personality
+m_selfgroom_nb_full <- glmmTMB(
+  self_groom_count ~ introversion + openness + boldness + calmness + age + davids_score + observability,
+  family = nbinom2(link = "log"),
+  data = df
+)
+summary(m_selfgroom_nb_full)
+
+
+# Masturbation and Personality
+m_mast_nb_full <- glmmTMB(
+  masturbation_count ~ introversion + openness + boldness + calmness + age + davids_score + observability,
+  family = nbinom2(link = "log"),
+  data = df
+)
+summary(m_mast_nb_full)
+
+
+# Rank and Personality
+m_rank_gauss_full <- glmmTMB(
+  davids_score ~ introversion + openness + boldness + calmness + age + observability,
+  family = gaussian(link = "identity"),
+  data = df
+)
+summary(m_rank_gauss_full)
+
+
+
+
+## Figures
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(broom)
+
+
+# SSB and Personality (full model)
+make_ssb_plot <- function(trait_name, df_model = df_trials, m = m_ssb_bb_full,
+                          show_count = FALSE) {
+  stopifnot(trait_name %in% c("introversion","openness","boldness","calmness"))
+  
+  rng <- range(df_model[[trait_name]], na.rm = TRUE)
+  newdat <- data.frame(
+    introversion = mean(df_model$introversion, na.rm = TRUE),
+    openness     = mean(df_model$openness,     na.rm = TRUE),
+    boldness     = mean(df_model$boldness,     na.rm = TRUE),
+    calmness     = mean(df_model$calmness,     na.rm = TRUE),
+    age          = mean(df_model$age,          na.rm = TRUE),
+    davids_score = mean(df_model$davids_score, na.rm = TRUE),
+    observability= mean(df_model$observability,na.rm = TRUE)
+  )
+  newdat <- newdat[rep(1, 100), , drop = FALSE]
+  newdat[[trait_name]] <- seq(rng[1], rng[2], length.out = 100)
+  
+  pr <- suppressWarnings(predict(m, newdata = newdat, type = "response", se.fit = TRUE))
+  newdat$p_hat <- pr$fit
+  newdat$se    <- pr$se.fit
+  newdat$lo    <- pmax(0, pmin(1, newdat$p_hat - 1.96 * newdat$se))
+  newdat$hi    <- pmax(0, pmin(1, newdat$p_hat + 1.96 * newdat$se))
+  
+  plot_df <- df_model
+  if (show_count) {
+    mean_mounts <- mean(df_model$total_mount_count, na.rm = TRUE)
+    newdat$y    <- newdat$p_hat * mean_mounts
+    newdat$y_lo <- newdat$lo     * mean_mounts
+    newdat$y_hi <- newdat$hi     * mean_mounts
+    plot_df$raw_y <- plot_df$ssb_count
+    ylab_txt <- paste0("Predicted SSB count (at mean total mounts = ",
+                       round(mean_mounts, 1), ")")
+  } else {
+    plot_df$raw_y <- with(plot_df, ifelse(total_mount_count > 0,
+                                          ssb_count / total_mount_count, NA_real_))
+    newdat$y    <- newdat$p_hat
+    newdat$y_lo <- newdat$lo
+    newdat$y_hi <- newdat$hi
+    ylab_txt <- "Predicted SSB proportion"
+  }
+  
+  ok <- is.finite(plot_df$raw_y) & is.finite(plot_df[[trait_name]])
+  plot_df <- plot_df[ok, , drop = FALSE]
+  
+  ggplot() +
+    geom_point(data = plot_df,
+               aes(x = .data[[trait_name]], y = raw_y),
+               alpha = 0.6) +
+    geom_ribbon(data = newdat,
+                aes(x = .data[[trait_name]], ymin = y_lo, ymax = y_hi),
+                alpha = 0.2) +
+    geom_line(data = newdat,
+              aes(x = .data[[trait_name]], y = y),
+              linewidth = 0.8) +
+    labs(x = trait_name, y = ylab_txt,
+         title = paste("SSB ~", trait_name, "(beta–binomial, adjusted)")) +
+    theme_classic()
+}
+
+p_ssb_introversion <- make_ssb_plot("introversion", show_count = FALSE)
+p_ssb_openness     <- make_ssb_plot("openness",     show_count = FALSE)
+p_ssb_boldness     <- make_ssb_plot("boldness",     show_count = FALSE)
+p_ssb_calmness     <- make_ssb_plot("calmness",     show_count = FALSE)
+
+p_ssb_introversion; p_ssb_openness; p_ssb_boldness; p_ssb_calmness
+
+
+# Heat Map - Overview 
+ssb_prop <- df %>%
+  mutate(ssb_prop = ifelse(total_mount_count > 0,
+                           ssb_count / total_mount_count, NA_real_)) %>%
+  select(id, ssb_prop)
+
+overview <- df %>%
+  select(id,
+         introversion, openness, boldness, calmness,
+         groom_count, aggression_count, coalition_count,
+         self_groom_count, masturbation_count,
+         davids_score, total_mount_count) %>%
+  left_join(ssb_prop, by = "id")
+
+preds <- c("introversion","openness","boldness","calmness")
+outs  <- c("ssb_prop","groom_count","aggression_count","coalition_count",
+           "self_groom_count","masturbation_count","davids_score","total_mount_count")
+
+cor_mat <- matrix(NA_real_, nrow = length(outs), ncol = length(preds),
+                  dimnames = list(outs, preds))
+for (o in outs) for (p in preds) {
+  x <- overview[[o]]; y <- overview[[p]]
+  ok <- is.finite(x) & is.finite(y)
+  cor_mat[o, p] <- if (sum(ok) >= 3) suppressWarnings(cor(x[ok], y[ok], method = "spearman")) else NA_real_
+}
+
+heat_df <- as.data.frame(as.table(cor_mat))
+colnames(heat_df) <- c("Outcome","Predictor","rho")
+
+ggplot(heat_df, aes(Predictor, Outcome, fill = rho)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(limits = c(-1,1), oob = scales::squish,
+                       low = "blue", mid = "white", high = "red", midpoint = 0) +
+  labs(x = NULL, y = NULL, fill = "Spearman ?",
+       title = "Overview: correlations between personality traits and behaviours") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
